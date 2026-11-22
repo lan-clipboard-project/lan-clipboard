@@ -68,20 +68,17 @@ jobs:
           go test -race -count=1 -tags sqlite_fts5 ./...
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build a native image for acceptance tests
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          platforms: linux/${{ matrix.arch }}
-          load: true
-          push: false
-          tags: lan-clipboard:ci
-          build-args: |
-            APP_VERSION=${{ steps.version.outputs.value }}
-            APP_REVISION=${{ github.sha }}
-            APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          provenance: false
-          cache-from: type=gha,scope=container-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+          APP_VERSION: ${{ steps.version.outputs.value }}
+        # Invoke Buildx directly so the full GitHub event payload stays out of the logs.
+        run: |
+          docker buildx build \
+            --platform "linux/$TARGET_ARCH" --load --provenance=false \
+            --build-arg "APP_VERSION=$APP_VERSION" \
+            --build-arg "APP_REVISION=$GITHUB_SHA" \
+            --build-arg "APP_SOURCE=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --tag lan-clipboard:ci .
       - name: Verify default installation and persistent storage
         run: |
           bash scripts/test-container.sh lan-clipboard:ci volume
