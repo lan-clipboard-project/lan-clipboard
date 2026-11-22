@@ -1,0 +1,9 @@
+# Use with compose.yaml when the data directory must be visible on the host.
+services:
+  clipboard:
+    volumes:
+      - type: bind
+        source: ${CLIP_HOST_DATA_DIR:?Set CLIP_HOST_DATA_DIR to an existing local directory}
+        target: /app/data
+        bind:
+          create_host_path: false

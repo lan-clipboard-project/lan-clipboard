@@ -1,0 +1,179 @@
+name: Test and publish container
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: verify (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      CGO_ENABLED: "1"
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.4"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: server/go.sum
+      - name: Select version
+        id: version
+        run: |
+          version="sha-$GITHUB_SHA"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            [[ "$GITHUB_REF_NAME" == "v$(cat VERSION)" ]]
+            [[ "$GITHUB_REF_NAME" == "v$(node -p 'require("./web/package.json").version')" ]]
+            version="$GITHUB_REF_NAME"
+          fi
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Install frontend dependencies
+        run: npm ci --prefix web --no-audit --no-fund
+      - name: Typecheck, build, vet and test the real server
+        run: |
+          make test vet smoke
+          cd server
+          go test -race -count=1 -tags sqlite_fts5 ./...
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build a native image for acceptance tests
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          tags: lan-clipboard:ci
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
+            APP_REVISION=${{ github.sha }}
+            APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
+          provenance: false
+          cache-from: type=gha,scope=container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
+      - name: Verify default installation and persistent storage
+        run: |
+          bash scripts/test-container.sh lan-clipboard:ci volume
+          bash scripts/test-container.sh lan-clipboard:ci bind
+      - name: Export the exact verified image
+        if: github.event_name == 'push'
+        run: docker image save lan-clipboard:ci | gzip > "$RUNNER_TEMP/lan-clipboard-image.tar.gz"
+      - name: Transfer verified image to publisher
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-${{ matrix.arch }}
+          path: ${{ runner.temp }}/lan-clipboard-image.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.images.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: verified-*
+          path: ${{ runner.temp }}/verified-images
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified architecture manifests
+        id: images
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          manifests=()
+          for arch in amd64 arm64; do
+            docker image load --input "$RUNNER_TEMP/verified-images/verified-$arch/lan-clipboard-image.tar.gz"
+            [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' lan-clipboard:ci)" == "linux/$arch" ]]
+            ref="$image:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
+            docker image tag lan-clipboard:ci "$ref"
+            docker push "$ref" | tee "$RUNNER_TEMP/push-$arch.log"
+            digest=$(awk '/digest: sha256:/ { print $3 }' "$RUNNER_TEMP/push-$arch.log")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            manifests+=("$image@$digest")
+          done
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tags=(-t "$image:$GITHUB_REF_NAME" -t "$image:latest")
+          else
+            tags=(-t "$image:sha-$GITHUB_SHA")
+          fi
+          metadata="$RUNNER_TEMP/index.json"
+          docker buildx imagetools create --metadata-file "$metadata" "${tags[@]}" "${manifests[@]}"
+          digest=$(jq -r '.["containerimage.descriptor"].digest // empty' "$metadata")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Prepare and publish the standalone Compose files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}@$RELEASE_DIGEST"
+          directory="$RUNNER_TEMP/install"
+          mkdir -p "$directory"
+          sed "s|lan-clipboard:local|$image|" compose.yaml > "$directory/compose.yaml"
+          cp compose.bind.yaml "$directory/"
+          cp .env.example "$directory/env.example"
+          (
+            cd "$directory"
+            [[ "$(docker compose config --images clipboard)" == "$image" ]]
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$directory/compose.yaml" \
+              "$directory/compose.bind.yaml" "$directory/env.example" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes \
+              "$directory/compose.yaml" "$directory/compose.bind.yaml" "$directory/env.example"
+          fi

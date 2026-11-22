@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --button-press-tint: rgb(17 24 39 / 0.11);
+  }
+
+  .dark {
+    --button-press-tint: rgb(255 255 255 / 0.12);
+  }
+}
+
+@layer components {
+  .frosted-bar {
+    --bar-background: 250 251 252;
+    --bar-opacity: 0.76;
+    background-color: rgb(var(--bar-background));
+    border-color: rgb(17 24 39 / 0.1);
+  }
+
+  .dark .frosted-bar {
+    --bar-background: 17 24 39;
+    --bar-opacity: 0.8;
+    border-color: rgb(255 255 255 / 0.13);
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .frosted-bar {
+      background-color: rgb(var(--bar-background) / var(--bar-opacity));
+      -webkit-backdrop-filter: saturate(155%) blur(20px);
+      backdrop-filter: saturate(155%) blur(20px);
+    }
+  }
+
+  .timeline-scroll {
+    /* Extend the scrollport under both bars while keeping its resting content in view. */
+    inset-block: calc(-1 * var(--top-bar-height, 0px)) calc(-1 * var(--bottom-bar-height, 0px));
+    scroll-padding-block: var(--top-bar-height, 0px) var(--bottom-bar-height, 0px);
+  }
+
+  .timeline-scroll::-webkit-scrollbar-track {
+    margin-block: var(--top-bar-height, 0px) var(--bottom-bar-height, 0px);
+  }
+
+  .timeline-content {
+    padding-block: calc(1rem + var(--top-bar-height, 0px)) calc(1rem + var(--bottom-bar-height, 0px));
+  }
+
+  .clip-card {
+    @apply border-gray-200 bg-white shadow-sm;
+  }
+
+  .dark .clip-card {
+    @apply border-gray-700 bg-gray-800;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  }
+
+  @media (hover: hover) {
+    .clip-card:hover {
+      box-shadow: 0 2px 6px rgb(15 23 42 / 0.05), 0 10px 30px -7px rgb(15 23 42 / 0.16);
+    }
+
+    .dark .clip-card:hover {
+      background-color: #293548;
+      border-color: #53627a;
+      box-shadow: 0 8px 20px -5px rgb(0 0 0 / 0.28);
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .clip-card {
+      transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+    }
+  }
+
+  button:enabled:is(:active, [data-touch-pressed]) {
+    background-image: linear-gradient(var(--button-press-tint), var(--button-press-tint));
+  }
+
+  .markdown-preview > * + * {
+    @apply mt-2;
+  }
+
+  .markdown-preview :is(h1, h2, h3, h4, h5, h6) {
+    @apply font-semibold;
+  }
+
+  .markdown-preview h1 {
+    @apply text-lg;
+  }
+
+  .markdown-preview h2 {
+    @apply text-base;
+  }
+
+  .markdown-preview ul {
+    @apply list-disc pl-5;
+  }
+
+  .markdown-preview ol {
+    @apply list-decimal pl-5;
+  }
+
+  .markdown-preview a {
+    @apply break-words text-blue-600 underline dark:text-blue-400;
+  }
+
+  .markdown-preview :is(p, td, th) {
+    @apply break-words;
+  }
+
+  .markdown-preview blockquote {
+    @apply border-l-2 border-gray-300 pl-3 text-gray-600 dark:border-gray-600 dark:text-gray-300;
+  }
+
+  .markdown-preview pre {
+    @apply overflow-auto rounded bg-gray-200/60 p-2 dark:bg-gray-800;
+  }
+
+  .markdown-preview :is(td, th) {
+    @apply border border-gray-200 px-2 py-1 text-left dark:border-gray-700;
+  }
+
+  .markdown-preview hr {
+    @apply border-gray-200 dark:border-gray-700;
+  }
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.5);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(156, 163, 175, 0.8);
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(75, 85, 99, 0.5);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(75, 85, 99, 0.8);
+}
+
+/* Prevent body scroll when modal is open */
+body.modal-open {
+  overflow: hidden;
+}
+
+/* Animation keyframes */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes clip-exit {
+  0% {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  55% {
+    opacity: 0;
+  }
+  100% {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@layer utilities {
+  .animate-clip-exit {
+    animation: clip-exit cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-clip-exit {
+      animation-name: none;
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.25s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+
+  .animate-slide-down {
+    animation: slide-down 0.2s ease-out;
+  }
+}

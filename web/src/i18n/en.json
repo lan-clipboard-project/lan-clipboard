@@ -1,0 +1,97 @@
+{
+  "header": {
+    "title": "LAN Clipboard",
+    "search": "Search content or file names...",
+    "clearAll": "Clear All"
+  },
+  "input": {
+    "placeholder": "Type text or paste content...",
+    "send": "Send",
+    "sendHint": "Ctrl+Enter to send",
+    "fileTooLarge": "File size exceeds limit (max {{max}})",
+    "textTooLong": "Text content exceeds limit (max {{max}})"
+  },
+  "clip": {
+    "copy": "Copy",
+    "copied": "Copied",
+    "download": "Download",
+    "openInNewWindow": "Open in new window",
+    "delete": "Delete",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "expand": "Show more",
+    "collapse": "Show less",
+    "preview": "Preview",
+    "unknownUploader": "Unknown source"
+  },
+  "date": {
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "pinned": "Pinned",
+    "navigation": "Jump to date",
+    "loadNewer": "Load newer clips",
+    "jumpFailed": "Couldn’t jump to that date"
+  },
+  "search": {
+    "results": "Search Results",
+    "noResults": "No results found",
+    "searching": "Searching...",
+    "all": "All",
+    "text": "Text",
+    "image": "Image",
+    "file": "File"
+  },
+  "dialog": {
+    "confirmDelete": "Are you sure you want to delete this item?",
+    "confirmClearAll": "Are you sure you want to clear all items? This action cannot be undone.",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "cleared": "All items cleared"
+  },
+  "dropzone": {
+    "hint": "Drop files here to upload"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "language": {
+    "zh": "中文",
+    "en": "English",
+    "switch": "Switch language"
+  },
+  "empty": {
+    "title": "No content yet",
+    "description": "Type text below or drag & drop files here"
+  },
+  "upload": {
+    "uploading": "Uploading...",
+    "progress": "{{percent}}%"
+  },
+  "error": {
+    "deleteFailed": "Failed to delete",
+    "updateFailed": "Failed to update",
+    "sendFailed": "Failed to send",
+    "uploadFailed": "Upload failed",
+    "clearFailed": "Failed to clear all items"
+  },
+  "preview": {
+    "expand": "Expand preview",
+    "collapse": "Collapse preview",
+    "loading": "Loading preview…",
+    "unavailable": "This file couldn’t be previewed",
+    "officeUnavailable": "Office preview service is unavailable",
+    "mediaUnavailable": "This browser can’t play the file",
+    "tooLarge": "This file is too large to preview",
+    "retry": "Retry",
+    "sheet": "Worksheet",
+    "emptySheet": "This worksheet is empty",
+    "sheetLimit": "Showing the first {{rows}} rows and {{columns}} columns",
+    "page": "Page {{current}} of {{total}}",
+    "previousSlide": "Previous slide",
+    "nextSlide": "Next slide",
+    "slide": "Slide {{current}} of {{total}}"
+  }
+}

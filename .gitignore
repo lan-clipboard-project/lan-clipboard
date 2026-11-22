@@ -1,0 +1,42 @@
+.DS_Store
+*.log
+
+# Local Go toolchain, module cache and build cache
+.tools/
+bin/
+
+# Local data (SQLite database + uploads)
+data/
+server/data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Environment variables (never commit secrets; ship an .env.example instead)
+.env
+.env.*
+!.env.example
+
+# Go test / coverage / profiling artifacts
+coverage.out
+*.test
+*.prof
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+web/.npm-cache/
+npm-debug.log*
+
+# Built frontend copied into the server for single-process deployment
+server/static/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+
+# Local scratch / verification artifacts
+.tmp/
+generated_images/

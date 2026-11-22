@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="LAN Clipboard（局域网剪贴板）技术架构文档：单进程 Go + React SPA + SQLite FTS5 + WebSocket，含架构图、数据流、API、数据模型与构建部署说明。">
+<title>LAN Clipboard · 技术架构文档</title>
+<script>
+  (function () {
+    var theme = 'light';
+    try {
+      var saved = localStorage.getItem('lc-doc-theme');
+      if (saved === 'light' || saved === 'dark') {
+        theme = saved;
+      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        theme = 'dark';
+      }
+    } catch (e) {}
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.classList.add('js');
+  })();
+</script>
+<style>
+  /* ============ 设计变量 ============ */
+  :root {
+    color-scheme: light;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --bg: #f5f6fa;
+    --bg-soft: #eef1f8;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #5b6b82;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --accent: #4f46e5;
+    --accent-2: #0e7490;
+    --accent-soft: #eef2ff;
+    --green: #047857;
+    --green-soft: #ecfdf5;
+    --amber: #b45309;
+    --amber-soft: #fffbeb;
+    --red: #b91c1c;
+    --red-soft: #fef2f2;
+    --purple: #7c3aed;
+    --purple-soft: #f5f3ff;
+    --code-bg: #0d1526;
+    --code-ink: #dbe4f5;
+    --code-muted: #7f8ea8;
+    --topbar-bg: rgba(245, 246, 250, 0.82);
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 16px 40px -20px rgba(15, 23, 42, 0.25);
+    --radius: 16px;
+    --d-client: #2563eb;
+    --d-client-bg: rgba(37, 99, 235, 0.06);
+    --d-server: #4f46e5;
+    --d-server-bg: rgba(79, 70, 229, 0.06);
+    --d-store: #047857;
+    --d-store-bg: rgba(4, 120, 87, 0.06);
+    --d-static: #b45309;
+    --d-static-bg: rgba(180, 83, 9, 0.06);
+    --d-line-http: #2563eb;
+    --d-line-ws: #0e7490;
+    --d-line-data: #047857;
+    --d-line-fs: #b45309;
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #070c17;
+    --bg-soft: #0a1120;
+    --surface: #0e172a;
+    --surface-2: #111d33;
+    --ink: #e7eef9;
+    --ink-2: #c3d0e2;
+    --muted: #8ea3bd;
+    --border: #1d2b45;
+    --border-strong: #2b3d5e;
+    --accent: #a5b4fc;
+    --accent-2: #67e8f9;
+    --accent-soft: #17203c;
+    --green: #6ee7b7;
+    --green-soft: #0c2a22;
+    --amber: #fcd34d;
+    --amber-soft: #2c2109;
+    --red: #fca5a5;
+    --red-soft: #2c1013;
+    --purple: #c4b5fd;
+    --purple-soft: #221437;
+    --code-bg: #060b14;
+    --code-ink: #dbe4f5;
+    --code-muted: #7c8cab;
+    --topbar-bg: rgba(7, 12, 23, 0.84);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 20px 50px -24px rgba(0, 0, 0, 0.8);
+    --d-client: #93c5fd;
+    --d-client-bg: rgba(147, 197, 253, 0.09);
+    --d-server: #a5b4fc;
+    --d-server-bg: rgba(165, 180, 252, 0.09);
+    --d-store: #6ee7b7;
+    --d-store-bg: rgba(110, 231, 183, 0.08);
+    --d-static: #fcd34d;
+    --d-static-bg: rgba(252, 211, 77, 0.08);
+    --d-line-http: #93c5fd;
+    --d-line-ws: #67e8f9;
+    --d-line-data: #6ee7b7;
+    --d-line-fs: #fcd34d;
+  }
+
+  /* ============ 基础 ============ */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.68;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  code, kbd, pre, .mono { font-family: var(--mono); }
+  pre code {
+    white-space: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  code {
+    font-size: 0.86em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.12em 0.38em;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+    white-space: nowrap;
+  }
+  img { max-width: 100%; height: auto; }
+  ::selection { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .container { width: min(1120px, calc(100% - 48px)); margin-inline: auto; }
+  .section { padding-block: 84px; border-top: 1px solid var(--border); scroll-margin-top: 84px; }
+  .section:first-of-type { border-top: 0; }
+  .section-head { margin-bottom: 36px; max-width: 780px; }
+  .kicker {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12.5px; font-weight: 650; letter-spacing: 0.14em;
+    color: var(--accent); text-transform: uppercase; margin: 0 0 14px;
+  }
+  .kicker .num {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 7px; padding: 1px 7px;
+    background: var(--accent-soft);
+  }
+  h2 { font-size: clamp(1.6rem, 2.8vw, 2.15rem); line-height: 1.25; letter-spacing: -0.02em; margin: 0 0 14px; font-weight: 750; }
+  h3 { font-size: 1.06rem; letter-spacing: -0.01em; margin: 0 0 8px; font-weight: 700; }
+  .lead { color: var(--muted); font-size: 1.02rem; margin: 0; }
+  .section > .container > p:not(.lead):not(.kicker) { color: var(--ink-2); }
+  .small { font-size: 0.85rem; color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: 0.88em; }
+
+  /* ============ 顶部导航 ============ */
+  .progress { position: fixed; top: 0; left: 0; height: 2px; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); z-index: 100; transition: width 0.1s linear; }
+  .topbar {
+    position: sticky; top: 0; z-index: 90;
+    background: var(--topbar-bg);
+    -webkit-backdrop-filter: saturate(1.6) blur(14px);
+    backdrop-filter: saturate(1.6) blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner { display: flex; align-items: center; gap: 18px; min-height: 62px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 750; letter-spacing: -0.01em; white-space: nowrap; }
+  .brand:hover { text-decoration: none; }
+  .brand svg { width: 26px; height: 26px; }
+  .brand small { display: block; font-size: 10.5px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; line-height: 1.2; }
+  .topnav { display: flex; align-items: center; gap: 2px; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+  .topnav::-webkit-scrollbar { display: none; }
+  .topnav a {
+    color: var(--muted); font-size: 13px; font-weight: 550; padding: 6px 10px;
+    border-radius: 8px; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease;
+  }
+  .topnav a:hover { color: var(--ink); background: var(--surface-2); text-decoration: none; }
+  .topnav a.active { color: var(--accent); background: var(--accent-soft); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; border-radius: 10px; flex: none;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--ink-2); cursor: pointer; transition: border-color .15s, color .15s, transform .15s;
+  }
+  .icon-btn:hover { color: var(--accent); border-color: var(--border-strong); transform: translateY(-1px); }
+  .icon-btn svg { width: 17px; height: 17px; }
+  [data-theme="light"] .i-sun { display: none; }
+  [data-theme="dark"] .i-moon { display: none; }
+
+  /* ============ Hero ============ */
+  .hero {
+    position: relative; overflow: hidden;
+    padding: 64px 0 48px;
+    background:
+      radial-gradient(900px 430px at 88% -14%, rgba(99, 102, 241, 0.16), transparent 62%),
+      radial-gradient(760px 420px at 4% 2%, rgba(14, 165, 233, 0.12), transparent 58%);
+  }
+  [data-theme="dark"] .hero {
+    background:
+      radial-gradient(900px 430px at 88% -14%, rgba(99, 102, 241, 0.22), transparent 62%),
+      radial-gradient(760px 420px at 4% 2%, rgba(14, 165, 233, 0.14), transparent 58%);
+  }
+  .hero-grid { display: grid; grid-template-columns: 1.02fr 1fr; gap: 52px; align-items: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 650; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; margin: 0 0 18px; }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 16%, transparent); }
+  h1 { font-size: clamp(2.3rem, 5vw, 3.6rem); line-height: 1.08; letter-spacing: -0.035em; margin: 0 0 18px; font-weight: 800; }
+  h1 em { font-style: normal; background: linear-gradient(92deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .h1-sub { display: block; font-size: clamp(1.15rem, 2.1vw, 1.5rem); letter-spacing: 0.02em; color: var(--muted); font-weight: 600; margin-top: 12px; }
+  .lede { font-size: 1.06rem; color: var(--ink-2); max-width: 34em; margin: 0 0 26px; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px; border-radius: 11px; font-size: 14px; font-weight: 650;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--shadow-sm); border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  [data-theme="dark"] .btn.primary { color: #0b1020; }
+  .btn.primary:hover { box-shadow: 0 10px 26px -12px var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 550; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .chip.green .dot { background: var(--green); }
+  .chip.cyan .dot { background: var(--accent-2); }
+  .chip.amber .dot { background: var(--amber); }
+
+  .browser-frame {
+    border-radius: 14px; overflow: hidden; background: var(--surface);
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+    transform: rotate(0.6deg);
+  }
+  .browser-bar { display: flex; align-items: center; gap: 6px; padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .browser-bar span { width: 9px; height: 9px; border-radius: 50%; background: #d4d9e2; }
+  .browser-bar span:nth-child(1) { background: #ff5f57; }
+  .browser-bar span:nth-child(2) { background: #febc2e; }
+  .browser-bar span:nth-child(3) { background: #28c840; }
+  .browser-bar em { margin-left: 8px; font-family: var(--mono); font-style: normal; font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .browser-frame img { display: block; width: 100%; }
+  .hero-caption { margin: 12px 2px 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-top: 46px; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 13px;
+    padding: 15px 14px; box-shadow: var(--shadow-sm);
+  }
+  .stat b { display: block; font-size: 1.42rem; line-height: 1.15; letter-spacing: -0.02em; font-weight: 750; }
+  .stat span { display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+
+  /* ============ 通用组件 ============ */
+  .grid { display: grid; gap: 16px; }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid > *, .hero-grid > *, .shots > * { min-width: 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px; box-shadow: var(--shadow-sm);
+  }
+  .card > p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+  .card h3 { display: flex; align-items: center; gap: 8px; }
+  .card h3 .idx {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--accent);
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 6px; letter-spacing: 0;
+  }
+  .card ul { margin: 12px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 0.9rem; }
+  .card ul li { margin: 5px 0; }
+  .card ul li::marker { color: var(--accent); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    color: var(--muted); background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; margin-left: 2px;
+  }
+  .callout {
+    display: flex; gap: 13px; align-items: flex-start;
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    background: var(--surface); border-radius: 12px; padding: 16px 18px;
+    box-shadow: var(--shadow-sm); margin-top: 20px;
+  }
+  .callout .ic { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 750; font-size: 13px; }
+  .callout.warn { border-left-color: var(--amber); }
+  .callout.warn .ic { background: var(--amber-soft); color: var(--amber); }
+  .callout.good { border-left-color: var(--green); }
+  .callout.good .ic { background: var(--green-soft); color: var(--green); }
+  .callout p { margin: 0; font-size: 0.9rem; color: var(--ink-2); }
+  .callout p + p { margin-top: 6px; }
+  .callout strong { color: var(--ink); }
+
+  /* 代码块 */
+  .codeblock {
+    position: relative; background: var(--code-bg); border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 12px; overflow: hidden; margin: 16px 0 0; box-shadow: var(--shadow-sm);
+  }
+  .codeblock .cb-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    font-family: var(--mono); font-size: 11px; color: var(--code-muted); letter-spacing: 0.02em;
+  }
+  .codeblock .cb-head::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #475569; }
+  .codeblock pre { margin: 0; padding: 16px 18px; overflow-x: auto; color: var(--code-ink); font-size: 12.8px; line-height: 1.62; }
+  .codeblock code { background: none; border: 0; padding: 0; color: inherit; font-size: inherit; white-space: pre; }
+  .codeblock .copy {
+    position: absolute; top: 7px; right: 8px; z-index: 2;
+    font-family: var(--font); font-size: 11px; font-weight: 600; color: #cbd5e1;
+    background: rgba(148, 163, 184, 0.14); border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 6px; padding: 3px 9px; cursor: pointer; opacity: 0; transition: opacity .15s;
+  }
+  .codeblock:hover .copy, .codeblock:focus-within .copy { opacity: 1; }
+  .codeblock .copy:hover { background: rgba(148, 163, 184, 0.26); }
+  .tok-k { color: #c4b5fd; } .tok-s { color: #86efac; } .tok-c { color: #93a4c0; } .tok-n { color: #fbbf24; }
+
+  /* 表格 */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow-sm); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); background: var(--surface-2); padding: 11px 15px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 11px 15px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--ink-2); }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: color-mix(in srgb, var(--accent) 3%, transparent); }
+  td.mono, th.mono { font-family: var(--mono); font-size: 12.3px; color: var(--ink); }
+  .method {
+    display: inline-block; min-width: 56px; text-align: center; font-family: var(--mono);
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; border-radius: 5px; padding: 2px 6px;
+  }
+  .m-get { color: var(--green); background: var(--green-soft); }
+  .m-post { color: var(--accent); background: var(--accent-soft); }
+  .m-patch { color: var(--amber); background: var(--amber-soft); }
+  .m-delete { color: var(--red); background: var(--red-soft); }
+  .m-ws { color: var(--purple); background: var(--purple-soft); }
+
+  /* 截图 */
+  .shots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .shots.three { grid-template-columns: repeat(3, 1fr); }
+  figure.shot { margin: 0; }
+  figure.shot img {
+    display: block; width: 100%; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--surface); box-shadow: var(--shadow-sm); cursor: zoom-in;
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+  figure.shot img:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  figure.shot figcaption { margin-top: 9px; text-align: center; font-size: 12px; color: var(--muted); }
+  figure.shot.mobile img { max-height: 520px; width: auto; max-width: 100%; margin-inline: auto; }
+
+  /* 架构图 */
+  .diagram-wrap {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; box-shadow: var(--shadow-sm); overflow-x: auto;
+  }
+  .diagram { display: block; width: 100%; height: auto; min-width: 930px; }
+  .diagram text { font-family: var(--font); }
+  .diagram .tier { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.1; stroke-dasharray: 7 6; }
+  .diagram .tier-label { font-size: 11.5px; font-weight: 650; letter-spacing: 0.08em; fill: var(--muted); }
+  .diagram .box { stroke-width: 1.4; }
+  .diagram .box-client { fill: var(--d-client-bg); stroke: var(--d-client); }
+  .diagram .box-server { fill: var(--d-server-bg); stroke: var(--d-server); }
+  .diagram .box-store { fill: var(--d-store-bg); stroke: var(--d-store); }
+  .diagram .box-static { fill: var(--d-static-bg); stroke: var(--d-static); }
+  .diagram .chip2 { fill: var(--surface); stroke: var(--d-client); stroke-width: 1.1; }
+  .diagram .t { font-size: 13.5px; font-weight: 700; fill: var(--ink); }
+  .diagram .s { font-size: 11.2px; fill: var(--muted); }
+  .diagram .cs { font-size: 11.5px; font-weight: 600; fill: var(--ink-2); }
+  .diagram .m { font-family: var(--mono); font-size: 10.8px; fill: var(--muted); }
+  .diagram .arrow { fill: none; stroke-width: 1.7; }
+  .diagram .a-http { stroke: var(--d-line-http); }
+  .diagram .a-ws { stroke: var(--d-line-ws); stroke-dasharray: 6 4; }
+  .diagram .a-data { stroke: var(--d-line-data); }
+  .diagram .a-fs { stroke: var(--d-line-fs); stroke-dasharray: 6 4; }
+  .diagram .lbl { font-size: 10.6px; font-weight: 600; fill: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; padding: 0 2px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--muted); }
+  .sw-http { border-color: var(--d-line-http); }
+  .sw-ws { border-color: var(--d-line-ws); border-top-style: dashed; }
+  .sw-data { border-color: var(--d-line-data); }
+  .sw-fs { border-color: var(--d-line-fs); border-top-style: dashed; }
+  .diagram-scroll-hint { display: none; margin: 10px 2px 0; font-size: 11.5px; color: var(--muted); }
+
+  /* 流程步骤 */
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 7px 0; position: relative; }
+  .step:not(:last-child)::before {
+    content: ""; position: absolute; left: 12.5px; top: 33px; bottom: -2px;
+    border-left: 1.5px dashed var(--border-strong);
+  }
+  .step .n {
+    width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    z-index: 1;
+  }
+  .step .body b { display: block; font-size: 0.89rem; font-weight: 650; color: var(--ink); line-height: 1.4; }
+  .step .body span { display: block; font-size: 0.83rem; color: var(--muted); line-height: 1.5; }
+  .step .body code { white-space: normal; }
+
+  /* 树 */
+  .tree, .tree ul { list-style: none; margin: 0; padding-left: 20px; }
+  .tree { padding-left: 0; font-size: 0.88rem; }
+  .tree ul { border-left: 1px dashed var(--border-strong); margin-left: 8px; }
+  .tree li { position: relative; padding: 3px 0 3px 4px; color: var(--ink-2); }
+  .tree > li { font-weight: 650; color: var(--ink); }
+  .tree ul li::before { content: ""; position: absolute; left: -20px; top: 17px; width: 13px; border-top: 1px dashed var(--border-strong); }
+  .tree .desc { color: var(--muted); font-weight: 400; font-size: 0.83rem; }
+  .tree code { white-space: normal; }
+  .tree li { overflow-wrap: anywhere; }
+
+  /* 状态列表 */
+  .status-list { display: grid; gap: 8px; }
+  .status-row {
+    display: grid; grid-template-columns: 30px 1fr auto; gap: 12px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+    padding: 11px 14px; box-shadow: var(--shadow-sm);
+  }
+  .status-row .st { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+  .st.ok { color: var(--green); background: var(--green-soft); }
+  .st.warn { color: var(--amber); background: var(--amber-soft); }
+  .st.no { color: var(--red); background: var(--red-soft); }
+  .status-row .what b { font-size: 0.9rem; font-weight: 650; display: block; line-height: 1.4; }
+  .status-row .what span { font-size: 0.82rem; color: var(--muted); }
+  .status-row .verdict { font-family: var(--mono); font-size: 10.5px; font-weight: 650; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .verdict.ok { color: var(--green); background: var(--green-soft); }
+  .verdict.warn { color: var(--amber); background: var(--amber-soft); }
+  .verdict.no { color: var(--red); background: var(--red-soft); }
+
+  /* 优先级清单 */
+  .prio { display: flex; gap: 14px; align-items: flex-start; }
+  .prio .p {
+    flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    font-family: var(--mono); font-size: 12px; font-weight: 800;
+  }
+  .prio.p0 .p { color: var(--red); background: var(--red-soft); }
+  .prio.p1 .p { color: var(--amber); background: var(--amber-soft); }
+  .prio.p2 .p { color: var(--accent); background: var(--accent-soft); }
+  .prio h3 { margin: 2px 0 6px; }
+  .prio ul { margin: 0; padding-left: 18px; font-size: 0.86rem; color: var(--ink-2); }
+  .prio ul li { margin: 4px 0; }
+  .prio ul li::marker { color: var(--muted); }
+
+  /* 链接卡片 */
+  .doc-links { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 22px; }
+  .doc-link {
+    display: flex; gap: 14px; align-items: flex-start; padding: 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 13px;
+    color: var(--ink); box-shadow: var(--shadow-sm); transition: transform .15s ease, border-color .15s ease;
+  }
+  .doc-link:hover { text-decoration: none; transform: translateY(-2px); border-color: var(--accent); }
+  .doc-link .ic { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .doc-link .ic svg { width: 18px; height: 18px; }
+  .doc-link b { display: block; font-size: 0.92rem; }
+  .doc-link span { display: block; margin-top: 2px; font-size: 0.82rem; color: var(--muted); }
+  .doc-link .go { margin-left: auto; color: var(--muted); font-family: var(--mono); }
+
+  /* 底部 */
+  footer { border-top: 1px solid var(--border); padding: 36px 0 46px; color: var(--muted); font-size: 12.5px; background: var(--bg-soft); }
+  footer .container { display: flex; flex-wrap: wrap; gap: 14px 28px; justify-content: space-between; align-items: flex-start; }
+  footer p { margin: 0; }
+  footer .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+  .to-top { position: fixed; right: 22px; bottom: 22px; z-index: 80; opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+  .to-top.show { opacity: 1; pointer-events: auto; }
+
+  /* 灯箱 */
+  .lightbox {
+    position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; background: rgba(3, 7, 18, 0.9);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); padding: 28px;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img { max-width: min(1400px, 94vw); max-height: 82vh; border-radius: 10px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  .lightbox figcaption { color: #cbd5e1; font-size: 12.5px; text-align: center; max-width: 80vw; }
+  .lb-close { position: absolute; top: 18px; right: 20px; width: 38px; height: 38px; border-radius: 10px; border: 1px solid rgba(148,163,184,.35); background: rgba(15,23,42,.6); color: #e2e8f0; font-size: 18px; cursor: pointer; }
+  .lb-close:hover { background: rgba(30,41,59,.9); }
+
+  /* 动效 */
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    figure.shot img, .btn, .doc-link, .icon-btn, .browser-frame, .copy { transition: none; }
+  }
+
+  /* ============ 响应式 ============ */
+  @media (max-width: 1000px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 34px; }
+    .hero-caption { display: none; }
+    .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    .grid-4 { grid-template-columns: repeat(2, 1fr); }
+    .shots.three { grid-template-columns: 1fr; }
+    .shots.three figure.shot img { max-height: 460px; width: auto; margin-inline: auto; }
+  }
+  @media (max-width: 820px) {
+    .container { width: calc(100% - 32px); }
+    .section { padding-block: 58px; scroll-margin-top: 116px; }
+    .topbar-inner { flex-wrap: wrap; padding: 9px 0; gap: 10px; min-height: 0; }
+    .topnav { order: 3; width: 100%; margin-left: 0; padding-bottom: 2px; }
+    .icon-btn { margin-left: auto; }
+    .grid-3, .grid-2, .doc-links { grid-template-columns: 1fr; }
+    .shots { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .diagram-scroll-hint { display: block; }
+    .codeblock pre { font-size: 12px; }
+    .status-row { grid-template-columns: 28px 1fr; }
+    .status-row .verdict { grid-column: 2; justify-self: start; }
+    .browser-frame { transform: none; }
+  }
+  @media (max-width: 480px) {
+    h1 { font-size: 2.15rem; }
+    .tree ul { padding-left: 14px; margin-left: 4px; }
+    .tree ul li::before { left: -14px; width: 9px; }
+
+    .stat b { font-size: 1.22rem; }
+    th, td { padding: 9px 11px; }
+  }
+
+  /* ============ 打印 ============ */
+  @media print {
+    .topbar, .progress, .to-top, .lightbox, .copy, .diagram-scroll-hint { display: none !important; }
+    body { background: #fff; color: #000; font-size: 11pt; }
+    .section { padding-block: 18px; break-inside: avoid; }
+    .card, .table-wrap, .diagram-wrap, .codeblock { box-shadow: none; }
+    .js .reveal { opacity: 1; transform: none; }
+    a { color: #000; }
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<!-- ============ 顶部导航 ============ -->
+<header class="topbar">
+  <div class="container topbar-inner">
+    <a class="brand" href="#overview" aria-label="回到文档开头">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="5" y="3.5" width="14" height="17" rx="3" fill="url(#logoGrad)"/>
+        <rect x="9" y="2" width="6" height="3.6" rx="1.4" fill="#fff" opacity=".92"/>
+        <path d="M8.6 11.2h6.8M8.6 14.6h4.6" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity=".85"/>
+        <defs>
+          <linearGradient id="logoGrad" x1="5" y1="3" x2="19" y2="21" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span>LAN Clipboard<small>技术架构文档</small></span>
+    </a>
+    <nav class="topnav" aria-label="文档目录">
+      <a href="#overview">概览</a>
+      <a href="#architecture">架构</a>
+      <a href="#flows">数据流</a>
+      <a href="#stack">技术栈</a>
+      <a href="#data">数据模型</a>
+      <a href="#api">API</a>
+      <a href="#frontend">前端</a>
+      <a href="#build">构建部署</a>
+      <a href="#engineering">工程化</a>
+    </nav>
+    <button class="icon-btn" id="themeToggle" type="button" aria-label="切换深色 / 浅色主题">
+      <svg class="i-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.5 14.2A8.2 8.2 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      <svg class="i-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4.1" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+<!-- ============ HERO ============ -->
+<section class="hero" id="overview">
+  <div class="container">
+    <div class="hero-grid">
+      <div>
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>技术架构文档</p>
+        <h1>LAN <em>Clipboard</em><span class="h1-sub">局域网剪贴板 · 跨设备实时共享</span></h1>
+        <p class="lede">任意设备打开网页，粘贴文本、上传图片或文件，同一局域网内的其他设备通过 WebSocket 实时收到。单进程部署、数据留在家中、无需账号与云服务。</p>
+        <div class="hero-actions">
+          <a class="btn primary" href="#architecture">查看整体架构 <span aria-hidden="true">→</span></a>
+          <a class="btn" href="#engineering">工程化现状</a>
+        </div>
+        <div class="chips" aria-label="核心特性">
+          <span class="chip green"><span class="dot"></span>单进程 Go</span>
+          <span class="chip cyan"><span class="dot"></span>WebSocket 实时同步</span>
+          <span class="chip"><span class="dot"></span>SQLite + FTS5 全文搜索</span>
+          <span class="chip amber"><span class="dot"></span>局域网优先 · 零云依赖</span>
+        </div>
+      </div>
+      <div>
+        <div class="browser-frame">
+          <div class="browser-bar" aria-hidden="true">
+            <span></span><span></span><span></span>
+            <em>http://127.0.0.1:18080</em>
+          </div>
+          <img src="screenshots/desktop-light.png" alt="桌面端浅色主题界面截图：顶部标题栏、搜索与统计，中间为置顶区和按日期分组的剪贴板列表，底部为输入框" width="2560" height="1800">
+        </div>
+        <p class="hero-caption">桌面端浅色主题 · 实际运行界面</p>
+      </div>
+    </div>
+
+    <div class="stats-grid" aria-label="项目关键数据">
+      <div class="stat reveal"><b>2,800</b><span>行 Go 代码<br>（含 1,021 行测试）</span></div>
+      <div class="stat reveal"><b>2,571</b><span>行 TypeScript / TSX</span></div>
+      <div class="stat reveal"><b>12 + 1</b><span>REST 端点<br>+ WebSocket 端点</span></div>
+      <div class="stat reveal"><b>18</b><span>个 Go 测试函数<br>覆盖 store / API / WS</span></div>
+      <div class="stat reveal"><b>7</b><span>个环境变量<br>即可完成配置</span></div>
+      <div class="stat reveal"><b>5</b><span>个直接 Go 依赖<br>无外部服务</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 01 整体架构 ============ -->
+<section class="section" id="architecture">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">01</span>整体架构</p>
+      <h2>一个 Go 进程，托起全部状态与实时通道</h2>
+      <p class="lead">服务端是一个编译好的 Go 二进制：同时提供 REST API、WebSocket 实时通道与前端静态页面。数据落在本地 SQLite（WAL 模式）和上传目录中，没有 Redis、消息队列、对象存储或外部数据库。</p>
+    </div>
+
+    <div class="diagram-wrap reveal">
+      <svg class="diagram" viewBox="0 0 1180 720" role="img" aria-labelledby="archTitle archDesc">
+        <title id="archTitle">LAN Clipboard 运行时架构图</title>
+        <desc id="archDesc">分三层：浏览器客户端通过 HTTP 和 WebSocket 访问 Go 单进程服务端；服务端由 Gin 路由、四组 Handler、SQLiteStore、WebSocket Hub 和清理协程组成；存储层为 SQLite 数据库、上传文件目录与前端静态资源。</desc>
+        <defs>
+          <marker id="m-http" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="var(--d-line-http)"/></marker>
+          <marker id="m-ws" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="var(--d-line-ws)"/></marker>
+          <marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="var(--d-line-data)"/></marker>
+          <marker id="m-fs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="var(--d-line-fs)"/></marker>
+        </defs>
+
+        <!-- 客户端层 -->
+        <rect class="tier" x="56" y="48" width="1068" height="118" rx="18"/>
+        <text class="tier-label" x="76" y="72">① 客户端 · 浏览器（零安装、无需账号）</text>
+        <rect class="box box-client" x="420" y="82" width="420" height="66" rx="12"/>
+        <text class="t" x="630" y="107" text-anchor="middle">React 18 SPA · Vite 构建</text>
+        <text class="s" x="630" y="128" text-anchor="middle">Zustand 状态 · i18next 中/英 · Tailwind 主题 · WS 自动重连</text>
+        <rect class="chip2" x="76" y="94" width="86" height="26" rx="13"/>
+        <text class="cs" x="119" y="111" text-anchor="middle">桌面</text>
+        <rect class="chip2" x="172" y="94" width="86" height="26" rx="13"/>
+        <text class="cs" x="215" y="111" text-anchor="middle">手机</text>
+        <rect class="chip2" x="268" y="94" width="86" height="26" rx="13"/>
+        <text class="cs" x="311" y="111" text-anchor="middle">平板</text>
+        <text class="s" x="76" y="146">同一局域网 · 多设备共享</text>
+        <rect class="box box-client" x="864" y="82" width="240" height="66" rx="12"/>
+        <text class="t" x="984" y="107" text-anchor="middle">四种输入方式</text>
+        <text class="s" x="984" y="128" text-anchor="middle">输入框 · 拖拽 · 粘贴 · 文件选择</text>
+
+        <!-- 客户端 ↔ 服务端 -->
+        <line class="arrow a-http" x1="520" y1="166" x2="520" y2="230" marker-end="url(#m-http)"/>
+        <text class="lbl" x="508" y="198" text-anchor="end">HTTP / JSON · multipart · 游标分页</text>
+        <line class="arrow a-ws" x1="820" y1="230" x2="820" y2="166" marker-end="url(#m-ws)"/>
+        <text class="lbl" x="832" y="198">WebSocket · 实时事件广播</text>
+
+        <!-- 服务端层 -->
+        <rect class="tier" x="56" y="230" width="1068" height="300" rx="18"/>
+        <text class="tier-label" x="76" y="254">② 服务端 · Go 单进程（:8080）</text>
+        <rect class="box box-server" x="76" y="264" width="1028" height="42" rx="10"/>
+        <text class="s" x="590" y="290" text-anchor="middle">gin.Engine + Host 和同源检查 · 路由 /api/** · /ws · SPA 静态回退 · 上传缓冲 32MB</text>
+
+        <rect class="box box-server" x="76" y="324" width="244" height="62" rx="10"/>
+        <text class="t" x="198" y="349" text-anchor="middle">Clip Handler</text>
+        <text class="s" x="198" y="369" text-anchor="middle">文本 CRUD · 置顶 · 分页</text>
+        <rect class="box box-server" x="336" y="324" width="244" height="62" rx="10"/>
+        <text class="t" x="458" y="349" text-anchor="middle">File Handler</text>
+        <text class="s" x="458" y="369" text-anchor="middle">上传 · 缩略图 · 下载</text>
+        <rect class="box box-server" x="596" y="324" width="244" height="62" rx="10"/>
+        <text class="t" x="718" y="349" text-anchor="middle">Search Handler</text>
+        <text class="s" x="718" y="369" text-anchor="middle">FTS5 + LIKE 双通道</text>
+        <rect class="box box-server" x="856" y="324" width="244" height="62" rx="10"/>
+        <text class="t" x="978" y="349" text-anchor="middle">WS Handler</text>
+        <text class="s" x="978" y="369" text-anchor="middle">Upgrade · 注册 · 双向泵</text>
+
+        <line class="arrow a-data" x1="198" y1="386" x2="198" y2="412" marker-end="url(#m-data)"/>
+        <line class="arrow a-data" x1="458" y1="386" x2="458" y2="412" marker-end="url(#m-data)"/>
+        <line class="arrow a-data" x1="718" y1="386" x2="718" y2="412" marker-end="url(#m-data)"/>
+        <line class="arrow a-ws" x1="978" y1="386" x2="978" y2="412" marker-end="url(#m-ws)"/>
+
+        <rect class="box box-server" x="76" y="412" width="760" height="80" rx="12"/>
+        <text class="t" x="456" y="438" text-anchor="middle">store.SQLiteStore</text>
+        <text class="s" x="456" y="458" text-anchor="middle">CRUD · 游标分页 · FTS5/LIKE 搜索 · 置顶 · 过期清理 · 统计</text>
+        <text class="s" x="456" y="477" text-anchor="middle">SQLite WAL · busy_timeout=5000ms · FTS5 触发器自动同步索引</text>
+        <rect class="box box-server" x="856" y="412" width="244" height="80" rx="12"/>
+        <text class="t" x="978" y="438" text-anchor="middle">ws.Hub</text>
+        <text class="s" x="978" y="458" text-anchor="middle">channel 驱动广播</text>
+        <text class="s" x="978" y="477" text-anchor="middle">慢客户端自动剔除</text>
+        <text class="s" x="76" y="514">后台清理协程：每天 03:00 删除过期非置顶内容并广播事件　·　优雅关闭 10s · 请求头超时 15s</text>
+
+        <!-- 服务端 ↔ 存储 -->
+        <line class="arrow a-data" x1="238" y1="530" x2="238" y2="612" marker-end="url(#m-data)"/>
+        <text class="lbl" x="248" y="562">SQL</text>
+        <line class="arrow a-data" x1="578" y1="530" x2="578" y2="612" marker-end="url(#m-data)"/>
+        <text class="lbl" x="588" y="562">文件读写</text>
+        <line class="arrow a-fs" x1="930" y1="530" x2="930" y2="612" marker-end="url(#m-fs)"/>
+        <text class="lbl" x="940" y="562">静态资源</text>
+
+        <!-- 存储层 -->
+        <rect class="tier" x="56" y="580" width="1068" height="110" rx="18"/>
+        <text class="tier-label" x="76" y="604">③ 存储 · 本地文件系统（Docker 中挂载为数据卷）</text>
+        <rect class="box box-store" x="76" y="612" width="324" height="62" rx="10"/>
+        <text class="t" x="238" y="637" text-anchor="middle">clipboard.db</text>
+        <text class="s" x="238" y="657" text-anchor="middle">SQLite · WAL · clips + clips_fts</text>
+        <rect class="box box-store" x="416" y="612" width="324" height="62" rx="10"/>
+        <text class="t" x="578" y="637" text-anchor="middle">data/uploads/YYYY/MM/DD/</text>
+        <text class="s" x="578" y="657" text-anchor="middle">原文件 + 800px JPEG 缩略图</text>
+        <rect class="box box-static" x="756" y="612" width="348" height="62" rx="10"/>
+        <text class="t" x="930" y="637" text-anchor="middle">server/static（构建产物）</text>
+        <text class="s" x="930" y="657" text-anchor="middle">index.html + assets · SPA 回退</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="sw sw-http"></i>HTTP / JSON</span>
+      <span><i class="sw sw-ws"></i>WebSocket 事件</span>
+      <span><i class="sw sw-data"></i>SQL / 文件 I/O</span>
+      <span><i class="sw sw-fs"></i>静态资源</span>
+    </div>
+    <p class="diagram-scroll-hint">提示：在小屏幕上可左右滑动查看完整架构图。</p>
+
+    <div class="grid grid-3 reveal" style="margin-top: 26px">
+      <div class="card">
+        <h3><span class="idx">CLIENT</span>客户端</h3>
+        <p>React 18 单页应用，构建后就是几个静态文件。</p>
+        <ul>
+          <li>TypeScript 严格模式，<code>tsc --noEmit</code> 零错误才允许构建</li>
+          <li>Zustand 集中管理列表、置顶、搜索、分页与统计</li>
+          <li>REST 负责读写，WebSocket 负责“别人改了”的推送</li>
+          <li>中 / 英双语、浅色 / 深色 / 跟随系统三档主题</li>
+          <li>断线指数退避重连（1s → 30s），重连后自动重拉数据</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="idx">SERVER</span>服务端</h3>
+        <p>一个 Go 进程提供页面、API 和 WebSocket，内置 SQLite 持久化。</p>
+        <ul>
+          <li>Gin 路由：4 组 Handler 分别处理剪贴、文件、搜索与 WebSocket</li>
+          <li>SQLite 访问层封装 CRUD、游标分页、全文搜索与过期清理</li>
+          <li>WebSocket Hub 以 channel 驱动，向所有在线设备广播变更</li>
+          <li>文件名清洗、路径穿越防护、大小限制、优雅关闭</li>
+          <li>仅 5 个直接依赖（Gin / WebSocket / SQLite / UUID / 图像处理）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="idx">STORE</span>存储</h3>
+        <p>单机文件系统即全部持久化层，可直接打包迁移。</p>
+        <ul>
+          <li><code>clipboard.db</code>：SQLite（WAL 模式）+ FTS5 虚表与 3 个同步触发器</li>
+          <li><code>uploads/YYYY/MM/DD/</code>：UUIDv7 前缀的原文件与缩略图</li>
+          <li>非置顶内容保留 30 天，每天 03:00 自动清理数据库记录与磁盘文件</li>
+          <li>前端构建产物 <code>server/static</code> 由同一进程托管，SPA 路由回退到 index.html</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout good reveal">
+      <span class="ic" aria-hidden="true">1</span>
+      <div>
+        <p><strong>部署只需三样东西：</strong>一个 Go 二进制（约 18.5 MB）、一个静态目录、一个数据目录。没有外部服务需要编排，这也是后续 Docker 化非常轻量的根本原因。</p>
+        <p class="small">构建顺序：前端 <code>tsc</code> + <code>vite build</code> → 复制到 <code>server/static</code> → Go 以 CGO + <code>sqlite_fts5</code> 标签编译出单个可执行文件。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 02 关键数据流 ============ -->
+<section class="section" id="flows">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">02</span>关键数据流</p>
+      <h2>四条主线，串起整个应用</h2>
+      <p class="lead">所有写操作都是「先落库、再广播」：数据库是唯一事实来源，WebSocket 只负责把变更推给其他在线设备。下面四条流程覆盖了日常使用的全部路径。</p>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>文本剪贴 · 从输入到其他设备 <span class="tag">clip.go</span></h3>
+        <div class="flow" style="margin-top:14px">
+          <div class="step"><span class="n">1</span><div class="body"><b>POST /api/clips</b><span>前端发送 <code>{ content }</code>，长度不得超过 300 KB。</span></div></div>
+          <div class="step"><span class="n">2</span><div class="body"><b>生成 UUIDv7</b><span>时间有序的 ID，便于按时间排序，也避免自增 ID 暴露数据量。</span></div></div>
+          <div class="step"><span class="n">3</span><div class="body"><b>写入 SQLite</b><span>INSERT 触发 FTS5 同步触发器，搜索索引立即生效。</span></div></div>
+          <div class="step"><span class="n">4</span><div class="body"><b>广播 clip_created</b><span>Hub 将事件推给所有在线设备，每帧一条独立 JSON。</span></div></div>
+          <div class="step"><span class="n">5</span><div class="body"><b>其他设备即时插入列表</b><span>本地也立即渲染，并返回 201 给发起方，形成「自己看到 + 别人收到」双确认。</span></div></div>
+        </div>
+      </div>
+
+      <div class="card reveal">
+        <h3>文件上传 · 落盘与缩略图 <span class="tag">file.go</span></h3>
+        <div class="flow" style="margin-top:14px">
+          <div class="step"><span class="n">1</span><div class="body"><b>multipart 上传</b><span>字段支持 <code>files</code> 或 <code>file</code>；超过 32 MB 的部分自动落到临时文件，不会整包驻留内存。</span></div></div>
+          <div class="step"><span class="n">2</span><div class="body"><b>校验与清洗</b><span>单文件 ≤ 300 MB；文件名去掉目录、控制字符并截断到 200 字节，再拼上 UUID 前缀。</span></div></div>
+          <div class="step"><span class="n">3</span><div class="body"><b>按日期落盘</b><span>写入 <code>{data}/uploads/YYYY/MM/DD/uuid_原名</code>；随后写数据库，若入库失败会回滚已落盘的文件。</span></div></div>
+          <div class="step"><span class="n">4</span><div class="body"><b>大图缩略图</b><span>图片超过 10 MB 时生成最大宽 800px、质量 85 的 JPEG 缩略图，列表加载更快。</span></div></div>
+          <div class="step"><span class="n">5</span><div class="body"><b>入库并广播</b><span>每个文件独立成条，逐条广播 clip_created；失败时回滚已写文件，避免泄漏磁盘空间。</span></div></div>
+        </div>
+      </div>
+
+      <div class="card reveal">
+        <h3>实时广播 · 连接与重连 <span class="tag">ws/</span></h3>
+        <div class="flow" style="margin-top:14px">
+          <div class="step"><span class="n">1</span><div class="body"><b>GET /ws 升级连接</b><span>注册到 Hub；每个客户端拥有 256 深度的发送缓冲区。</span></div></div>
+          <div class="step"><span class="n">2</span><div class="body"><b>独立 JSON 帧</b><span>每条消息单独一帧（集成测试专门验证），客户端逐帧 JSON.parse。</span></div></div>
+          <div class="step"><span class="n">3</span><div class="body"><b>心跳保活</b><span>服务端 30s ping / 60s pong 超时 / 10s 写超时；慢客户端会被剔除，不拖垮广播循环。</span></div></div>
+          <div class="step"><span class="n">4</span><div class="body"><b>客户端指数退避</b><span>断线后 1s 起、每次 ×2、上限 30s 自动重连；重连成功后重新拉取数据。</span></div></div>
+          <div class="step"><span class="n">5</span><div class="body"><b>重连后补拉</b><span>断线期间错过的事件通过重新拉取 clips / pinned / stats 补齐，保证最终一致。</span></div></div>
+        </div>
+      </div>
+
+      <div class="card reveal">
+        <h3>全文搜索 · 中文与子串友好 <span class="tag">sqlite.go</span></h3>
+        <div class="flow" style="margin-top:14px">
+          <div class="step"><span class="n">1</span><div class="body"><b>按空格分词</b><span>每个词分别参与两种匹配，词与词之间是 AND 语义。</span></div></div>
+          <div class="step"><span class="n">2</span><div class="body"><b>FTS5 通道</b><span>用户输入全部加双引号后 MATCH，杜绝 FTS 语法注入与语法错误。</span></div></div>
+          <div class="step"><span class="n">3</span><div class="body"><b>LIKE 子串兜底</b><span>FTS5 的 unicode61 分词无法命中中文子串（如「实际」）和英文前缀（如「artic」），因此叠加 LIKE，并转义 <code>% _ \</code>。</span></div></div>
+          <div class="step"><span class="n">4</span><div class="body"><b>合并排序返回</b><span>两路用 OR 合并，支持类型筛选，按创建时间倒序取前 50 条。</span></div></div>
+          <div class="step"><span class="n">5</span><div class="body"><b>前端防抖与高亮</b><span>300ms 防抖请求，命中关键词在文本或文件名中加粗并以主题色高亮。</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout warn reveal">
+      <span class="ic" aria-hidden="true">!</span>
+      <div>
+        <p><strong>取舍说明：</strong>搜索每次会额外扫一遍 <code>clips</code> 表做 LIKE。在默认 30 天保留期、家庭规模的数据量下开销可以忽略；若未来数据量增长到十万级，再引入 FTS5 的 trigram 分词器或独立搜索索引即可。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 技术栈 ============ -->
+<section class="section" id="stack">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">03</span>技术栈</p>
+      <h2>刻意的“小”：每层只选一个够用的工具</h2>
+      <p class="lead">技术选型围绕「家庭服务器可长期无人值守」展开：能少一个进程就少一个进程，能少一个依赖就少一个依赖。</p>
+    </div>
+
+    <div class="table-wrap reveal">
+      <table>
+        <thead><tr><th>层</th><th>技术</th><th>版本</th><th>职责与理由</th></tr></thead>
+        <tbody>
+          <tr><td>后端语言</td><td class="mono">Go</td><td class="mono">go 1.27.4+</td><td>编译为单个应用进程，提供静态文件、API 和 WebSocket</td></tr>
+          <tr><td>HTTP 框架</td><td class="mono">Gin</td><td class="mono">v1.10.0</td><td>路由组、参数绑定、中间件与静态文件托管，生态成熟</td></tr>
+          <tr><td>实时通道</td><td class="mono">gorilla/websocket</td><td class="mono">v1.5.3</td><td>标准 WebSocket 实现，配合自研 Hub 做广播与慢客户端剔除</td></tr>
+          <tr><td>存储 / 搜索</td><td class="mono">SQLite + FTS5<br>mattn/go-sqlite3</td><td class="mono">v1.14.24</td><td>单文件数据库、零运维；FTS5 提供全文索引，需 CGO 与 <code>sqlite_fts5</code> 构建标签</td></tr>
+          <tr><td>图片处理</td><td class="mono">disintegration/imaging</td><td class="mono">v1.6.2</td><td>大图缩略图生成（自动方向校正、Lanczos 缩放、JPEG 质量 85）</td></tr>
+          <tr><td>唯一 ID</td><td class="mono">google/uuid</td><td class="mono">v1.6.0</td><td>UUIDv7：时间有序，利于游标分页与按时间排序</td></tr>
+          <tr><td>前端框架</td><td class="mono">React + TypeScript</td><td class="mono">18.3 / 5.6</td><td>组件化 UI；严格模式类型检查作为构建前置门槛</td></tr>
+          <tr><td>构建工具</td><td class="mono">Vite</td><td class="mono">5.4</td><td>开发态热更新 + 生产态小体积产物；<code>/api</code> 与 <code>/ws</code> 代理到 :8080</td></tr>
+          <tr><td>样式 / 状态 / 国际化</td><td class="mono">Tailwind CSS · Zustand · i18next</td><td class="mono">3.4 · 5.0 · 23</td><td>原子化样式、轻量集中状态、中英文文案</td></tr>
+          <tr><td>构建编排</td><td class="mono">Makefile</td><td class="mono">—</td><td>一条 <code>make build</code> 完成前端产物 + CGO 后端编译，<code>make test / smoke / vet</code> 兜底质量</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid grid-4" style="margin-top:18px">
+      <div class="card reveal"><h3>为什么是 Go</h3><ul><li>单二进制，无运行时依赖</li><li>goroutine 天然适合 WebSocket 泵与定时任务</li><li>单二进制适合容器化；CGO 依赖需在目标架构内构建</li></ul></div>
+      <div class="card reveal"><h3>为什么是 SQLite</h3><ul><li>一个文件即数据库，备份 = 复制文件</li><li>WAL 模式兼顾读写并发</li><li>FTS5 内建全文索引，不需要 Elasticsearch</li></ul></div>
+      <div class="card reveal"><h3>为什么是 WebSocket</h3><ul><li>剪贴板需要“秒级送达”而非轮询</li><li>双向长连接，服务端可主动推送</li><li>断线重连 + 重连补拉即可获得最终一致</li></ul></div>
+      <div class="card reveal"><h3>为什么是 React + Vite</h3><ul><li>交互密集，组件化收益明显</li><li>Vite 构建产物仅数百 KB</li><li>TS 严格模式替代一部分测试职责</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 数据模型 ============ -->
+<section class="section" id="data">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">04</span>数据模型</p>
+      <h2>一张主表 + 一张 FTS5 虚表，够用且可搜索</h2>
+      <p class="lead">所有内容统一建模为 <code>Clip</code>：文本、图片、文件共用一张表，用 <code>type</code> 区分，文件元数据冗余进主表，避免额外的关联查询。</p>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>clips 主表 <span class="tag">10 列 + 2 索引</span></h3>
+        <div class="table-wrap" style="margin-top: 12px">
+          <table>
+            <thead><tr><th>列</th><th>类型</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">id</td><td class="mono">TEXT PK</td><td>UUIDv7，时间有序</td></tr>
+              <tr><td class="mono">type</td><td class="mono">TEXT</td><td>text / image / file</td></tr>
+              <tr><td class="mono">content</td><td class="mono">TEXT</td><td>文本内容（图片 / 文件为空）</td></tr>
+              <tr><td class="mono">file_name</td><td class="mono">TEXT</td><td>清洗后的原始文件名</td></tr>
+              <tr><td class="mono">file_path</td><td class="mono">TEXT</td><td>服务端存储路径（JSON 不返回）</td></tr>
+              <tr><td class="mono">file_size</td><td class="mono">INTEGER</td><td>字节数，用于容量统计</td></tr>
+              <tr><td class="mono">mime_type</td><td class="mono">TEXT</td><td>决定 inline / attachment</td></tr>
+              <tr><td class="mono">has_thumb</td><td class="mono">INTEGER</td><td>是否有缩略图</td></tr>
+              <tr><td class="mono">pinned</td><td class="mono">INTEGER</td><td>置顶标记，永不自动清理</td></tr>
+              <tr><td class="mono">created_at</td><td class="mono">DATETIME</td><td>UTC，强制固定格式便于字符串比较</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="small" style="margin: 12px 0 0">另有 2 个索引：<code>created_at DESC</code>（列表 / 游标）与 <code>pinned</code>（置顶查询）。<code>fileUrl</code> / <code>thumbUrl</code> 是返回时计算的字段，不落库。</p>
+      </div>
+
+      <div class="reveal">
+        <div class="card">
+          <h3>FTS5 全文索引 <span class="tag">content='clips'</span></h3>
+          <p style="margin-top:8px">外部内容表（external content）模式：FTS 虚表不复制正文，只存倒排索引，主表通过 <code>rowid</code> 关联。</p>
+          <ul>
+            <li><code>clips_fts(content, file_name)</code> — 搜索文本内容与文件名</li>
+            <li>3 个触发器（<code>AI / AD / AU</code>）在增、删、改时自动同步索引</li>
+            <li>搜索时 FTS5 命中 ∪ LIKE 子串命中，兼顾分词质量与中文 / 前缀体验</li>
+            <li>索引随主表事务一起提交，不会出现“搜到已删除内容”</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>磁盘布局 <span class="tag">DATA_DIR</span></h3>
+          <pre class="mono" style="margin:10px 0 0; font-size:12.3px; line-height:1.75; color:var(--ink-2); overflow-x:auto"><code>{DATA_DIR}/
+├── clipboard.db          # SQLite（WAL 模式）
+├── clipboard.db-wal      # 预写日志（运行时）
+├── clipboard.db-shm      # 共享内存（运行时）
+└── uploads/
+    └── 2026/10/22/
+        ├── &lt;uuid&gt;_photo.png
+        ├── &lt;uuid&gt;_photo_thumb.jpg
+        └── &lt;uuid&gt;_notes.txt</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="codeblock reveal">
+      <div class="cb-head">server/store/sqlite.go · 建表与索引（幂等迁移）</div>
+      <pre><code><span class="tok-c">// 主表</span>
+CREATE TABLE IF NOT EXISTS clips (
+  id         TEXT PRIMARY KEY,
+  type       TEXT NOT NULL,
+  content    TEXT NOT NULL DEFAULT '',
+  file_name  TEXT NOT NULL DEFAULT '',
+  file_path  TEXT NOT NULL DEFAULT '',
+  file_size  INTEGER NOT NULL DEFAULT 0,
+  mime_type  TEXT NOT NULL DEFAULT '',
+  has_thumb  INTEGER NOT NULL DEFAULT 0,
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_clips_pinned     ON clips(pinned);
+
+<span class="tok-c">-- 全文索引：外部内容模式，不为正文冗余存储</span>
+CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(
+  content, file_name,
+  content='clips', content_rowid='rowid'
+);
+
+<span class="tok-c">-- 增 / 删 / 改三个触发器保持倒排索引与主表一致</span>
+CREATE TRIGGER IF NOT EXISTS clips_ai AFTER INSERT ON clips BEGIN
+  INSERT INTO clips_fts(rowid, content, file_name)
+  VALUES (new.rowid, new.content, new.file_name);
+END;
+<span class="tok-c">-- clips_ad（DELETE）与 clips_au（UPDATE）同理</span></code></pre>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:18px">
+      <div class="card reveal">
+        <h3>游标分页，而不是 OFFSET</h3>
+        <div class="flow" style="margin-top:12px">
+          <div class="step"><span class="n">1</span><div class="body"><b>首屏不带 cursor</b><span>查询 <code>WHERE pinned = 0 ORDER BY created_at DESC LIMIT 21</code>。</span></div></div>
+          <div class="step"><span class="n">2</span><div class="body"><b>多取一条判断 hasMore</b><span>返回 20 条，第 21 条只用于判断是否还有下一页。</span></div></div>
+          <div class="step"><span class="n">3</span><div class="body"><b>nextCursor = 最后一条的 createdAt</b><span>RFC3339Nano 格式，服务端可解析多种时间格式兼容旧游标。</span></div></div>
+          <div class="step"><span class="n">4</span><div class="body"><b>下一页 <code>created_at &lt; cursor</code></b><span>新内容不断插入也不会重复或漏读，这是置顶区之外唯一的翻页方式。</span></div></div>
+        </div>
+      </div>
+      <div class="card reveal">
+        <h3>自动清理策略</h3>
+        <ul>
+          <li>非置顶内容默认保留 <strong>30 天</strong>（<code>CLIP_RETENTION_DAYS</code> 可调）</li>
+          <li>后台协程每天 <strong>03:00</strong>（服务器本地时区）触发一次</li>
+          <li>先查过期记录 → 事务内删除 → 再删磁盘原文件与缩略图</li>
+          <li>每删除一条，向在线设备广播 <code>clip_deleted</code>，列表实时消失</li>
+          <li>置顶内容不受清理影响，相当于“永久收藏”</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 API ============ -->
+<section class="section" id="api">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">05</span>API 与实时协议</p>
+      <h2>12 个 REST 端点 + 1 条 WebSocket 通道</h2>
+      <p class="lead">接口全部同源相对路径，无鉴权头、无 Token 交换；错误统一返回 <code>{ "error": "..." }</code>。分页、上传、文件下载、统计都有独立端点。</p>
+    </div>
+
+    <div class="table-wrap reveal">
+      <table>
+        <thead><tr><th>方法</th><th>路径</th><th>说明</th><th>响应</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method m-post">POST</span></td><td class="mono">/api/clips</td><td>新建文本剪贴（≤ 300 KB）</td><td class="mono">201 {clip}</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/clips?cursor=&amp;limit=&amp;type=</td><td>非置顶列表，游标分页（limit 默认 20，上限 50）</td><td class="mono">{clips, hasMore, nextCursor}</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/clips/pinned</td><td>全部置顶内容（不分页）</td><td class="mono">{clips}</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/clips/search?q=&amp;type=</td><td>FTS5 + 子串双通道搜索，最多 50 条</td><td class="mono">{clips}</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td class="mono">/api/clips/upload</td><td>multipart 上传，字段 <code>files</code> / <code>file</code>，逐文件成条</td><td class="mono">201 {clips}</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/clips/:id</td><td>单条详情</td><td class="mono">{clip} / 404</td></tr>
+          <tr><td><span class="method m-patch">PATCH</span></td><td class="mono">/api/clips/:id</td><td>更新置顶：<code>{"pinned": true|false}</code></td><td class="mono">{clip}</td></tr>
+          <tr><td><span class="method m-delete">DELETE</span></td><td class="mono">/api/clips/:id</td><td>删除单条，同时删除磁盘文件与缩略图</td><td class="mono">{message}</td></tr>
+          <tr><td><span class="method m-delete">DELETE</span></td><td class="mono">/api/clips</td><td>清空全部（含所有磁盘文件）</td><td class="mono">{message, count}</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/files/*filepath</td><td>原文件；图片 inline、其他 attachment，文件名去掉 UUID 前缀</td><td class="mono">文件流</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/thumbnails/*filepath</td><td>800px JPEG 缩略图</td><td class="mono">image/jpeg</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="mono">/api/stats</td><td>存储统计，也用作容器健康检查端点</td><td class="mono">{totalClips, totalSize}</td></tr>
+          <tr><td><span class="method m-ws">WS</span></td><td class="mono">/ws</td><td>实时事件通道（服务端推送为主，客户端仅发心跳）</td><td class="mono">JSON 帧</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:18px">
+      <div class="reveal">
+        <h3 style="margin-bottom:10px">WebSocket 事件</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>type</th><th>data</th><th>触发时机</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">clip_created</td><td class="mono">完整 Clip</td><td>新建文本 / 每个文件上传成功</td></tr>
+              <tr><td class="mono">clip_updated</td><td class="mono">完整 Clip</td><td>置顶状态变更</td></tr>
+              <tr><td class="mono">clip_deleted</td><td class="mono">{ id }</td><td>单条删除 / 自动清理</td></tr>
+              <tr><td class="mono">clips_cleared</td><td class="mono">null</td><td>一键清空</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="codeblock reveal" style="margin-top:0">
+        <div class="cb-head">WebSocket 帧示例 · 每帧一个独立 JSON</div>
+        <pre><code>{
+  <span class="tok-s">"type"</span>: <span class="tok-s">"clip_created"</span>,
+  <span class="tok-s">"data"</span>: {
+    <span class="tok-s">"id"</span>: <span class="tok-s">"0192f3c1-7a2e-7d3b-..."</span>,
+    <span class="tok-s">"type"</span>: <span class="tok-s">"text"</span>,
+    <span class="tok-s">"content"</span>: <span class="tok-s">"随手记一条"</span>,
+    <span class="tok-s">"pinned"</span>: <span class="tok-k">false</span>,
+    <span class="tok-s">"createdAt"</span>: <span class="tok-s">"2026-10-22T06:31:00.123Z"</span>
+  }
+}</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 前端 ============ -->
+<section class="section" id="frontend">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">06</span>前端架构</p>
+      <h2>一层布局、一个 store、四个 Hook</h2>
+      <p class="lead">前端不做复杂路由，整页就是「头部 + 列表 + 输入框」三段式布局。服务端返回的状态由 Zustand 统一持有，组件只负责渲染与交互。</p>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>组件树</h3>
+        <ul class="tree" style="margin-top:12px">
+          <li><code>App.tsx</code> <span class="desc">— 布局 / 上传 / 拖拽 / Toast / 图片灯箱</span>
+            <ul>
+              <li><code>Header</code> <span class="desc">— 标题 · 连接状态 · 搜索 · 主题 · 语言 · 统计 · 清空</span>
+                <ul>
+                  <li><code>SearchBar</code> <span class="desc">— 300ms 防抖 · 类型筛选</span></li>
+                  <li><code>StatusBadge / ThemeToggle / LanguageSwitch</code></li>
+                </ul>
+              </li>
+              <li><code>ClipList</code> <span class="desc">— 置顶区 + 按日期分组 + 无限滚动</span>
+                <ul>
+                  <li><code>PinnedSection</code> → <code>ClipCard</code></li>
+                  <li><code>DateGroup</code> → <code>ClipCard</code></li>
+                  <li><code>ClipCard</code> → <code>TextClip / ImageClip / FileClip</code></li>
+                </ul>
+              </li>
+              <li><code>InputArea</code> <span class="desc">— 文本 · Ctrl/⌘+Enter · 选择文件 · 上传进度</span></li>
+              <li><code>DropZone</code> <span class="desc">— 全屏拖拽遮罩</span></li>
+              <li><code>ImagePreview / Toast / ConfirmDialog / UploadProgress</code></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+
+      <div class="reveal">
+        <div class="card">
+          <h3>状态与数据层</h3>
+          <div class="table-wrap" style="margin-top:12px">
+            <table>
+              <thead><tr><th>模块</th><th>职责</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">store/clipStore.ts</td><td>Zustand：clips / pinnedClips / cursor / hasMore / searchQuery / searchResults / filterType / stats，以及 add / remove / update / clear / fetch 动作</td></tr>
+                <tr><td class="mono">hooks/useWebSocket.ts</td><td>管理连接生命周期，把 4 类事件分发到 store</td></tr>
+                <tr><td class="mono">api/ws.ts</td><td>WebSocketClient：指数退避重连、30s 心跳、状态回调</td></tr>
+                <tr><td class="mono">api/clips.ts</td><td>REST 封装；上传使用 XHR 以获得进度回调</td></tr>
+                <tr><td class="mono">hooks/useInfiniteScroll.ts</td><td>滚动到距底部 100px 时加载下一页</td></tr>
+                <tr><td class="mono">hooks/useTheme.ts</td><td>light / dark / system 三档，localStorage 持久化</td></tr>
+                <tr><td class="mono">hooks/useClipboard.ts</td><td><code>navigator.clipboard</code>，失败时降级 <code>document.execCommand('copy')</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>体验细节</h3>
+          <div class="chips" style="margin-top:8px">
+            <span class="chip">中 / 英双语</span>
+            <span class="chip">浅色 / 深色 / 跟随系统</span>
+            <span class="chip">搜索关键词高亮</span>
+            <span class="chip">图片预览灯箱</span>
+            <span class="chip">拖拽上传 + 进度条</span>
+            <span class="chip">Ctrl/⌘ + Enter 发送</span>
+            <span class="chip">断线状态提示</span>
+            <span class="chip">移动端布局适配</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="shots three reveal" style="margin-top: 24px">
+      <figure class="shot">
+        <img src="screenshots/search.png" alt="全文搜索界面截图：搜索框输入关键词，结果中命中文本以主题色高亮，并显示类型筛选" width="2560" height="1800">
+        <figcaption>全文搜索 · 关键词高亮</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="screenshots/image-preview.png" alt="图片预览灯箱截图：点击图片后以大图浮层展示" width="2560" height="1800">
+        <figcaption>图片预览灯箱</figcaption>
+      </figure>
+      <figure class="shot mobile">
+        <img src="screenshots/mobile-dark.png" alt="移动端深色主题界面截图：窄屏布局下的剪贴板列表与底部输入框" width="780" height="1688">
+        <figcaption>移动端 · 深色主题</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 07 构建部署 ============ -->
+<section class="section" id="build">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="kicker"><span class="num">07</span>构建、配置与运行</p>
+      <h2>从源码到可运行服务的三步流水线</h2>
+      <p class="lead">Makefile 把两套工具链串起来：先构建前端静态产物，再以 CGO + FTS5 标签编译 Go 服务，最后把静态产物复制进服务目录。开发与生产共用同一套配置项。</p>
+    </div>
+
+    <div class="grid grid-3 reveal" style="margin-bottom:18px">
+      <div class="card">
+        <h3><span class="idx">STEP 1</span>前端构建</h3>
+        <pre class="mono" style="margin:10px 0 10px; font-size:12px; color:var(--ink-2); overflow-x:auto"><code>cd web
+npm ci
+npm run build</code></pre>
+        <p><code>typecheck</code>（tsc 严格模式）通过后，Vite 输出到 <code>web/dist</code>，只有 <code>index.html</code> + 少量 assets。</p>
+      </div>
+      <div class="card">
+        <h3><span class="idx">STEP 2</span>Go 编译</h3>
+        <pre class="mono" style="margin:10px 0 10px; font-size:12px; color:var(--ink-2); overflow-x:auto"><code>cd server
+go build -tags sqlite_fts5 \
+  -trimpath -o ../bin/lan-clipboard .</code></pre>
+        <p><strong>CGO 必需</strong>：<code>mattn/go-sqlite3</code> 依赖 libc；<code>sqlite_fts5</code> 标签决定 FTS5 是否可用，缺失会在建表阶段启动失败。</p>
+      </div>
+      <div class="card">
+        <h3><span class="idx">STEP 3</span>组装与启动</h3>
+        <pre class="mono" style="margin:10px 0 10px; font-size:12px; color:var(--ink-2); overflow-x:auto"><code>make run      # 从仓库根目录启动 127.0.0.1:8080</code></pre>
+        <p>服务同时提供 API、WebSocket 与前端页面；静态目录缺失时自动降级为纯 API 模式，便于前后端分离开发。</p>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>Makefile 目标</h3>
+        <div class="table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>目标</th><th>作用</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">make build</td><td>前端 + 后端全量构建</td></tr>
+              <tr><td class="mono">make run</td><td>构建静态产物并启动服务（:8080）</td></tr>
+              <tr><td class="mono">make dev</td><td>提示开发模式的两条命令</td></tr>
+              <tr><td class="mono">make dev-server<br>make dev-web</td><td>Go 服务 :8080 + Vite :5173（代理 /api、/ws）</td></tr>
+              <tr><td class="mono">make test</td><td>Go 测试（带 FTS5 标签）+ 前端类型检查</td></tr>
+              <tr><td class="mono">make smoke</td><td>真实启动服务跑端到端冒烟（API / 上传 / SPA）</td></tr>
+              <tr><td class="mono">make vet / fmt</td><td>go vet / gofmt</td></tr>
+              <tr><td class="mono">make bootstrap-go</td><td>下载项目内独立 Go 工具链到 <code>.tools/</code>，不改系统环境</td></tr>
+              <tr><td class="mono">make clean</td><td>清理构建产物与本机数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <div class="card">
+          <h3>运行时配置（环境变量）</h3>
+          <div class="table-wrap" style="margin-top:12px">
+            <table>
+              <thead><tr><th>变量</th><th>默认值</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">CLIP_PORT</td><td class="mono">8080</td><td>HTTP 监听端口</td></tr>
+                <tr><td class="mono">CLIP_DATA_DIR</td><td class="mono">./data</td><td>数据库与上传文件根目录</td></tr>
+                <tr><td class="mono">CLIP_STATIC_DIR</td><td class="mono">./static</td><td>前端构建产物目录</td></tr>
+                <tr><td class="mono">CLIP_MAX_FILE_SIZE</td><td class="mono">300</td><td>单文件上限（MB）</td></tr>
+                <tr><td class="mono">CLIP_MAX_TEXT_SIZE</td><td class="mono">307200</td><td>单条文本上限（字节，约 300 KB）</td></tr>
+                <tr><td class="mono">CLIP_RETENTION_DAYS</td><td class="mono">30</td><td>非置顶内容保留天数</td></tr>
+                <tr><td class="mono">CLIP_THUMBNAIL_THRESHOLD</td><td class="mono">10</td><td>超过该大小（MB）的图片才生成缩略图</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="callout warn" style="margin-top:16px">
+          <span class="ic" aria-hidden="true">!</span>
+          <div><p><strong>构建注意：</strong>Go 命令必须带 <code>-tags sqlite_fts5</code>，否则 go-sqlite3 不带 FTS5，服务会在建表阶段直接失败。Makefile 已统一处理这一点；手工构建或写 Dockerfile 时不要漏掉。</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout reveal" style="margin-top:18px">
+      <span class="ic" aria-hidden="true">i</span>
+      <div>
+        <p><strong>从源码部署：</strong>在源码目录内构建，<code>bin/lan-clipboard</code> + <code>server/static</code> + <code>server/data</code> 三处产物；<code>server/data</code> 与 <code>server/static</code> 均在 <code>.gitignore</code> 中，属于本机构建 / 运行数据。</p>
+        <p class="small">前端产物默认不打进 Go 二进制。若要“单文件分发”，可使用 <code>go:embed</code> 把 <code>web/dist</code> 嵌进二进制；当前设计选择目录拷贝，换取更快的迭代与更简单的调试。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="engineering">
+  <div class="container">
+    <div class="section-head reveal">
+      <h2>部署和维护</h2>
+      <p class="lead">采用 Compose 部署时，应用以非 root 用户运行。SQLite、上传文件和预览缓存保存在 /app/data。</p>
+    </div>
+    <div class="doc-links reveal">
+      <a class="doc-link" href="deployment.md"><span><b>部署指南</b><span>首次安装、反向代理、更新与备份</span></span></a>
+      <a class="doc-link" href="ENGINEERING.md"><span><b>维护与发布</b><span>构建和验证两个架构的镜像</span></span></a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="container">
+    <div>
+      <p><strong>LAN Clipboard · 技术架构文档</strong></p>
+      <p style="margin-top:6px">单文件架构说明</p>
+    </div>
+    <div class="meta">
+      <span>相关文档：<a href="../README.md">README.md</a> · <a href="../CHANGELOG.md">CHANGELOG.md</a> · <a href="ENGINEERING.md">ENGINEERING.md</a> · <a href="DOCKER.md">DOCKER.md</a></span>
+      <span class="mono" style="font-size:11.5px">docs/architecture.html</span>
+    </div>
+  </div>
+</footer>
+
+<button class="icon-btn to-top" id="toTop" type="button" aria-label="回到顶部">
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
+  <button class="lb-close" type="button" aria-label="关闭预览">×</button>
+  <img alt="">
+  <figcaption></figcaption>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- 主题 ---------- */
+  var root = document.documentElement;
+  var themeBtn = document.getElementById('themeToggle');
+  function applyTheme(theme) {
+    root.setAttribute('data-theme', theme);
+    try { localStorage.setItem('lc-doc-theme', theme); } catch (e) {}
+    if (themeBtn) {
+      themeBtn.setAttribute('aria-label', theme === 'dark' ? '切换到浅色主题' : '切换到深色主题');
+    }
+  }
+  if (themeBtn) {
+    themeBtn.addEventListener('click', function () {
+      applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+  }
+  applyTheme(root.getAttribute('data-theme') || 'light');
+
+  /* ---------- 阅读进度 ---------- */
+  var progress = document.getElementById('progress');
+  var toTop = document.getElementById('toTop');
+  function onScroll() {
+    var doc = document.documentElement;
+    var max = doc.scrollHeight - window.innerHeight;
+    var y = window.scrollY || doc.scrollTop;
+    if (progress) { progress.style.width = (max > 0 ? (y / max) * 100 : 0) + '%'; }
+    if (toTop) { toTop.classList.toggle('show', y > 600); }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+  if (toTop) {
+    toTop.addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }
+
+  /* ---------- 目录高亮 ---------- */
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll('.topnav a[href^="#"]'));
+  if ('IntersectionObserver' in window) {
+    var byId = {};
+    navLinks.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        navLinks.forEach(function (a) { a.classList.remove('active'); });
+        var link = byId[en.target.id];
+        if (link) link.classList.add('active');
+      });
+    }, { rootMargin: '-40% 0px -55% 0px' });
+    document.querySelectorAll('main section[id]').forEach(function (s) { spy.observe(s); });
+  }
+
+  /* ---------- 代码复制 ---------- */
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  document.querySelectorAll('.codeblock').forEach(function (block) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy';
+    btn.textContent = '复制';
+    block.appendChild(btn);
+    btn.addEventListener('click', function () {
+      var code = block.querySelector('code');
+      var text = code ? code.innerText : block.innerText;
+      var done = function () {
+        btn.textContent = '已复制';
+        setTimeout(function () { btn.textContent = '复制'; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
+      } else {
+        fallbackCopy(text);
+        done();
+      }
+    });
+  });
+
+  /* ---------- 图片灯箱 ---------- */
+  var lightbox = document.getElementById('lightbox');
+  if (lightbox) {
+    var lbImg = lightbox.querySelector('img');
+    var lbCap = lightbox.querySelector('figcaption');
+    document.querySelectorAll('figure.shot img').forEach(function (img) {
+      img.addEventListener('click', function () {
+        var fig = img.closest('figure');
+        var cap = fig ? fig.querySelector('figcaption') : null;
+        lbImg.src = img.currentSrc || img.src;
+        lbImg.alt = img.alt || '';
+        lbCap.textContent = cap ? cap.textContent : (img.alt || '');
+        lightbox.classList.add('open');
+        document.body.style.overflow = 'hidden';
+      });
+    });
+    function closeLightbox() {
+      lightbox.classList.remove('open');
+      lbImg.removeAttribute('src');
+      document.body.style.overflow = '';
+    }
+    lightbox.addEventListener('click', function (e) {
+      var t = e.target;
+      if (t === lightbox || (t.classList && t.classList.contains('lb-close'))) {
+        closeLightbox();
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeLightbox();
+    });
+  }
+})();
+</script>
+</body>
+</html>

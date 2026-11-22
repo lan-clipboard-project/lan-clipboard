@@ -1,0 +1,12 @@
+# Normalize line endings for text files; keep binary assets untouched.
+# 文本文件统一使用 LF（仓库内），检出不因平台而异。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

@@ -1,0 +1,72 @@
+# Release downloads replace the local image default with a tested GHCR version.
+name: lan-clipboard
+
+services:
+  clipboard:
+    image: ${CLIP_IMAGE:-lan-clipboard:local}
+    user: "10001:10001"
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - "${CLIP_BIND_ADDRESS:-127.0.0.1}:${CLIP_HOST_PORT:-18080}:8080"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      GIN_MODE: release
+      CLIP_PORT: "8080"
+      CLIP_PUBLIC_ORIGIN: ${CLIP_PUBLIC_ORIGIN:-}
+      CLIP_DATA_DIR: /app/data
+      CLIP_STATIC_DIR: /app/static
+      CLIP_MAX_FILE_SIZE: ${CLIP_MAX_FILE_SIZE:-300}
+      CLIP_MAX_TEXT_SIZE: ${CLIP_MAX_TEXT_SIZE:-307200}
+      CLIP_RETENTION_DAYS: ${CLIP_RETENTION_DAYS:-30}
+      CLIP_THUMBNAIL_THRESHOLD: ${CLIP_THUMBNAIL_THRESHOLD:-10}
+      CLIP_OFFICE_CONVERTER_URL: ${CLIP_OFFICE_CONVERTER_URL:-}
+    networks:
+      - default
+      - office
+    volumes:
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:8080/api/stats"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    pids_limit: 256
+    # Keep /tmp on disk: multipart uploads can spill files larger than 32 MB.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  office:
+    image: gotenberg/gotenberg:9.0.0-libreoffice
+    profiles: [office]
+    restart: unless-stopped
+    networks: [office]
+    environment:
+      API_TIMEOUT: 40s
+      API_BODY_LIMIT: 55MB
+      LIBREOFFICE_MAX_QUEUE_SIZE: "2"
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  office:
+    internal: true
+
+volumes:
+  app-data:
