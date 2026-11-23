@@ -81,6 +81,7 @@ jobs:
             --tag lan-clipboard:ci .
       - name: Verify default installation and persistent storage
         run: |
+          bash scripts/test-install.sh
           bash scripts/test-container.sh lan-clipboard:ci volume
           bash scripts/test-container.sh lan-clipboard:ci bind
       - name: Export the exact verified image
@@ -163,14 +164,18 @@ jobs:
           sed "s|lan-clipboard:local|$image|" compose.yaml > "$directory/compose.yaml"
           cp compose.bind.yaml "$directory/"
           cp .env.example "$directory/env.example"
+          cp scripts/install.sh "$directory/install.sh"
           (
             cd "$directory"
-            [[ "$(docker compose config --images clipboard)" == "$image" ]]
+            docker compose --env-file env.example config --quiet
+            [[ "$(docker compose --env-file env.example config --images clipboard)" == "$image" ]]
+            CLIP_HOST_DATA_DIR="$directory" docker compose --env-file env.example \
+              -f compose.yaml -f compose.bind.yaml config --quiet
           )
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$directory/compose.yaml" \
-              "$directory/compose.bind.yaml" "$directory/env.example" --clobber
+              "$directory/compose.bind.yaml" "$directory/env.example" "$directory/install.sh" --clobber
           else
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes \
-              "$directory/compose.yaml" "$directory/compose.bind.yaml" "$directory/env.example"
+              "$directory/compose.yaml" "$directory/compose.bind.yaml" "$directory/env.example" "$directory/install.sh"
           fi
