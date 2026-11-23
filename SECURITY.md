@@ -1,7 +1,8 @@
 # Security policy
 
 This application shares one clipboard with all clients that can reach it.
-The default Docker configuration publishes the service on the local host.
+The installer publishes the service to the Docker host's selected private IPv4
+address by default. Limit access to trusted devices on that network.
 For access outside a trusted network, use a VPN or an authenticated reverse
 proxy in front of the entire application, including its WebSocket endpoint.
 See the [deployment guide](docs/deployment.md) for configuration.

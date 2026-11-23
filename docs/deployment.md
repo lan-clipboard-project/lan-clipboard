@@ -2,7 +2,21 @@
 
 ## 1. 首次启动
 
-需要 Docker Engine 或 Docker Desktop，以及 Docker Compose v2。稳定版本的镜像包含 Linux x86-64 和 ARM64 构建。在本项目的 GitHub **Releases** 中选定版本，下载附件中的 **compose.yaml**，然后在文件所在目录运行：
+需要 Docker Engine 或 Docker Desktop，以及 Docker Compose 插件。稳定版本的镜像包含 Linux x86-64 和 ARM64 构建。
+
+### 安装脚本
+
+在 Docker 主机上创建并进入新目录，按 [Docker 快速开始](README.zh-CN.md#docker-快速开始) 下载最新稳定版的 `install.sh` 并执行。脚本从同一个 Release 下载 `compose.yaml`、`compose.bind.yaml` 和 `env.example`，将后者保存为 `.env.example` 并据此生成 `.env`。
+
+向导按 `LC_ALL`、`LC_MESSAGES`、`LANG` 的顺序读取终端语言，无法匹配时使用英语。运行 `sh ./install.sh --lang en` 可指定英语，运行 `sh ./install.sh --lang zh-CN` 可指定简体中文。
+
+安装脚本会在交互式终端临时下载并校验 Gum。用方向键选择，按回车确认。选择「自定义配置」后，可以按英文城市名或时区搜索。文字模式下按编号选时区，输入 `0` 可展开完整列表（系统提供时区表时）。
+
+默认使用检测到的局域网 IPv4 和端口 `18080`。在自定义配置中，可选「局域网」供同一局域网的设备访问，或选「仅本机」绑定 `127.0.0.1`。检测不到局域网 IPv4 时，向导会请你选择访问方式。选择「局域网」后可手动填写地址。下载中断后可重新运行脚本。跳过启动时，可在原目录运行 `docker compose up -d`。启动失败时，脚本会保存部署文件，排除 Docker 错误后在原目录重试同一命令。已有安装请从原目录[更新](#5-更新回滚与备份)。
+
+### 手动部署
+
+在 [GitHub Releases](https://github.com/lan-clipboard-project/lan-clipboard/releases) 选定版本，将附件 `compose.yaml` 和 `env.example` 放在同一目录。将 `env.example` 复制为 `.env`，取消 `CLIP_BIND_ADDRESS` 的注释并填入 Docker 主机的局域网 IPv4。然后在该目录运行以下命令。
 
 ```sh
 docker compose config --quiet
@@ -10,7 +24,7 @@ docker compose up -d
 docker compose ps
 ```
 
-等待状态显示 `healthy`，再打开 [http://127.0.0.1:18080](http://127.0.0.1:18080)。访问 [http://127.0.0.1:18080/api/stats](http://127.0.0.1:18080/api/stats) 应返回带有 `totalClips` 和 `totalSize` 的 JSON。空实例的两项值均为 0。可以打开两个浏览器窗口，确认一边发送文本或上传文件，另一边即时收到。
+等待状态显示 `healthy` 后，打开绑定的 IP 和端口，例如 `http://192.168.1.10:18080`。同一地址的 `/api/stats` 应返回带有 `totalClips` 和 `totalSize` 的 JSON。空实例的两项值均为 0。可以打开两个浏览器窗口，确认一边发送文本或上传文件，另一边即时收到。
 
 Release 附件通过镜像摘要锁定经过验收的版本，可以从公开 GHCR 匿名拉取。若要从源码自行构建，在仓库根目录执行：
 
@@ -27,7 +41,7 @@ docker compose up -d --pull never
 
 | 变量 | 用途 |
 | --- | --- |
-| `CLIP_BIND_ADDRESS` | 宿主机端口绑定地址，默认为 `127.0.0.1` |
+| `CLIP_BIND_ADDRESS` | 宿主机绑定地址。安装脚本写入局域网 IPv4。直接用 Compose 启动时，空值绑定 `127.0.0.1` |
 | `CLIP_HOST_PORT` | 宿主机访问端口，默认为 `18080` |
 | `CLIP_IMAGE` | 覆盖镜像版本，填写完整镜像名称和固定标签 |
 | `CLIP_PUBLIC_ORIGIN` | 使用自定义域名或 HTTPS 时，填浏览器访问的来源，如 `https://clip.example.test`，包含非默认端口时写上端口 |
@@ -39,7 +53,7 @@ docker compose up -d --pull never
 
 服务为共享剪贴板。访问端口的客户端都可以读取、添加和删除内容。只给可信设备开放网络访问。较旧的 Docker Engine 有本机端口映射的局域网可达例外，使用旧版 NAS 时也应在宿主机与网络层限制访问范围。[Docker 端口绑定说明](https://docs.docker.com/engine/network/port-publishing/)
 
-- **同一台电脑上使用**时，保持默认本机地址。
+- **同一台电脑上使用**时，将 `CLIP_BIND_ADDRESS` 设为 `127.0.0.1`。
 - **其他局域网设备直连**时，将 `CLIP_BIND_ADDRESS` 设为 Docker 主机的局域网 IP，通过 `http://<局域网IP>:18080` 访问。用防火墙限制可达设备或网段。
 - **通过反向代理使用域名**时，在 `.env` 设置 `CLIP_PUBLIC_ORIGIN`。使代理保留浏览器传入的 Host、将整个站点转发到应用端口，并支持 `/ws` 的 WebSocket Upgrade。代理与应用同机可连 `127.0.0.1:18080`。代理在另一台主机上时，绑定服务器的局域网 IP 并限制该端口的访问范围。
 - **跨不可信网络访问**时，使用 VPN 或在反向代理上配置身份验证，覆盖页面、API、上传下载和 WebSocket。HTTPS 为连接加密，也可让浏览器使用完整剪贴板 API。
